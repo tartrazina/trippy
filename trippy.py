@@ -1,202 +1,177 @@
-from PIL import Image
-from PIL import ImageDraw
-import os
-from tqdm import tqdm
-import imageio
-import math
+"""Efectos de distorsión sobre imágenes cuadradas, exportados como GIF.
+
+Todas las imágenes se cuantizan a una paleta fija y los efectos trabajan
+sobre los índices de la paleta, así que los colores nunca se mezclan.
+
+Uso desde línea de comandos, por ejemplo:
+    python trippy.py cycle imagen.png --colors 16
+    python trippy.py hosc imagen.png --interval 0.012 --distortion 10
+"""
+
+import argparse
 import random
-from collections import deque
+from pathlib import Path
 
-def shift(arr, d):
-    items = deque(arr)
-    items.rotate(d)
-    return list(items)
-
-def getPalette(filename, colornumber):
-    img = Image.open(filename)
-    draw = ImageDraw.Draw(img)
-    img = img.convert('P', palette=Image.ADAPTIVE, colors=int(
-        colornumber))  # reduce cantidad de colores
-    newfilename = filename.split('.')[0] + f'-{colornumber}.png'
-    img.save(newfilename)
-    img = Image.open(newfilename)
-    palette = img.getpalette()  # guarda paleta en arreglo de 256*3 de largo
-    tuple = []
-    tuple_palette = []
-    for i in range(len(palette)):  # guarda paleta en arreglo real de 256*3
-        if i % 3 == 2:
-            tuple.append(palette[i])
-            tuple_palette.append(tuple)
-            tuple = []
-        else:
-            tuple.append(palette[i])
-
-    height, width = img.size
-    map = {str(i):[] for i in range(colornumber)}
-    for y in range(height):  # guarda coordenadas por color
-        for x in range(width):
-            pixel = img.getpixel((x, y))
-            map[str(pixel)].append([x, y])
-
-    color_table = []
-    color_table_val = {}
-    for i in range(colornumber):
-        color_table.append(str(i)) # tabla de colores
-        color_table_val[str(i)] = tuple_palette[i] # tabla de conversión
-    return map, color_table, color_table_val
-
-def paletteCycling(filename, colornumber):
-    map, color_table, color_table_val = getPalette(filename, colornumber)
-    newfilename = filename.split('.')[0] + f'-{colornumber}.png'
-    img = Image.open(newfilename)
-    folder = newfilename.split('.')[0]
-    if not os.path.isdir(folder):
-        os.mkdir(folder)
-    os.chdir(folder)
-    counter = 0
-    print("\nPalette swapping...\n")
-    for i in tqdm(range(int(colornumber))):
-        for j in range(colornumber):
-            for coord in map[str(j)]:
-                color_rgb = color_table_val[str(color_table[j])]
-                img.putpixel((coord[0], coord[1]),
-                                (color_rgb[0], color_rgb[1], color_rgb[2]))
-            img.save(newfilename.split('.')[0] + f'-{counter}.png')
-            counter += 1
-        color_table = shift(color_table, -1)
-
-    images = []
-    print("\nGenerating gif...\n")
-    with imageio.get_writer('gif.gif', mode='I', duration=0.1) as writer:
-        for i in tqdm(range(counter)):
-            image = imageio.imread(newfilename.split('.')[0] + f'-{i}.png')
-            writer.append_data(image)
+import numpy as np
+from PIL import Image
 
 
-def horizontalOscillation(filename, interval, distorsion, iter): # intervalo normal 0.012, distorsion 10 es piola 256 es brigido, iter 256 si quiero el largo, 90 para loop para img de 256x256
-    map, color_table, color_table_val = getPalette(filename, 256)
-    newfilename = filename.split('.')[0] + f'-256-{interval*1000}-{distorsion}-moved-horizontal.png'
-    img = Image.open(filename)
-    height, width = img.size
-    image = {}
-    for y in range(height): # guarda las filas de pixeles en un diccionario
-        image[str(y)] = []
-        for x in range(width):
-            image[str(y)].append(img.getpixel((x, y)))
-    folder = newfilename.split('.')[0]
-    if not os.path.isdir(folder):
-        os.mkdir(folder)
-    os.chdir(folder)
-    sin_count = 0
-    print("\nVertical oscillation...\n")
-    for i in tqdm(range(iter)): #
-        for y in range(height):
-            if i < iter//2:
-                image[str(y)] = shift(image[str(y)],abs(math.floor(distorsion*math.sin(sin_count)))) # rota el arreglo
-            else:
-                image[str(y)] = shift(image[str(y)],-abs(math.floor(distorsion*math.sin(sin_count)))) # rota el arreglo. eliminar si es 256
-            for x in range(width):
-                color_rgb = image[str(y)][x] # saca el color del pixel
-                img.putpixel((x, y),(color_rgb[0], color_rgb[1], color_rgb[2])) # cambia el color del pixel
-            sin_count += interval
-        img.save(newfilename.split('.')[0] + f'-{i}.png')
+def _load_quantized(filename, colors):
+    """Abre una imagen cuadrada y la reduce a `colors` colores (modo 'P')."""
+    with Image.open(filename) as src:
+        if src.width != src.height:
+            raise ValueError(
+                f"{filename} debe ser cuadrada, pero mide {src.width}x{src.height}"
+            )
+        rgb = src.convert("RGB")
+    # Sin dithering: mantiene bloques de color limpios, como en pixel art.
+    return rgb.quantize(colors=colors, method=Image.Quantize.MEDIANCUT,
+                        dither=Image.Dither.NONE)
 
-    print("\nGenerating gif...\n")
-    with imageio.get_writer('gif.gif', mode='I', duration=0.1) as writer:
-        for i in tqdm(range(iter)):
-            image = imageio.imread(newfilename.split('.')[0] + f'-{i}.png')
-            writer.append_data(image)
 
-def verticalOscillation(filename, interval, distorsion, iter): # intervalo normal 0.012, distorsion 10 es piola 256 es brigido, iter 256 si quiero el largo, 90 para loop para img de 256x256
-    map, color_table, color_table_val = getPalette(filename, 256)
-    newfilename = filename.split('.')[0] + f'-256-{str(interval*1000)}-{str(distorsion)}-moved-vertical.png'
-    img = Image.open(filename)
-    height, width = img.size
-    image = {}
-    for x in range(width): # guarda las filas de pixeles en un diccionario
-        image[str(x)] = []
-        for y in range(height):
-            image[str(x)].append(img.getpixel((x, y)))
-    folder = newfilename.split('.')[0]
-    if not os.path.isdir(folder):
-        os.mkdir(folder)
-    os.chdir(folder)
-    sin_count = 0
-    print("\nVertical oscillation...\n")
-    for i in tqdm(range(iter)): #
-        for x in range(width):
-            if i < iter//2:
-                image[str(x)] = shift(image[str(x)],abs(math.floor(distorsion*math.sin(sin_count)))) # rota el arreglo
-            else:
-                image[str(x)] = shift(image[str(x)],-abs(math.floor(distorsion*math.sin(sin_count)))) # rota el arreglo. eliminar si es 256
-            for y in range(height):
-                color_rgb = image[str(x)][y] # saca el color del pixel
-                img.putpixel((x, y),(color_rgb[0], color_rgb[1], color_rgb[2])) # cambia el color del pixel
-            sin_count += interval
-        img.save(newfilename.split('.')[0] + f'-{i}.png')
+def _output_path(filename, effect, out_dir=None):
+    src = Path(filename)
+    folder = Path(out_dir) if out_dir else src.parent
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder / f"{src.stem}-{effect}.gif"
 
-    print("\nGenerating gif...\n")
-    with imageio.get_writer('gif.gif', mode='I', duration=0.1) as writer:
-        for i in tqdm(range(iter)):
-            image = imageio.imread(newfilename.split('.')[0] + f'-{i}.png')
-            writer.append_data(image)
 
-def randomizeHorizontal(filename, iter, seed):
-    map, color_table, color_table_val = getPalette(filename, 256)
-    random.seed(seed)
-    newfilename = filename.split('.')[0] + '-256-randomized-horizontal.png'
-    img = Image.open(filename)
-    height, width = img.size
-    image = {}
-    for y in range(height): # guarda las filas de pixeles en un diccionario
-        image[str(y)] = []
-        for x in range(width):
-            image[str(y)].append(img.getpixel((x, y)))
-    folder = newfilename.split('.')[0]
-    if not os.path.isdir(folder):
-        os.mkdir(folder)
-    os.chdir(folder)
-    print("\nRandomizing...\n")
-    for i in tqdm(range(iter)):
-        for y in range(height):
-            image[str(y)] = shift(image[str(y)],random.randint(0,256)) # rota el arreglo
-            for x in range(width):
-                color_rgb = image[str(y)][x] # saca el color del pixel
-                img.putpixel((x, y),(color_rgb[0], color_rgb[1], color_rgb[2])) # cambia el color del pixel
-        img.save(newfilename.split('.')[0] + f'-{iter}-{i}.png')
+def _roll_rows(arr, shifts):
+    """Rota cada fila de `arr` hacia la derecha según `shifts[fila]`."""
+    n, length = arr.shape
+    cols = (np.arange(length)[None, :] - shifts[:, None]) % length
+    return arr[np.arange(n)[:, None], cols]
 
-    print("\nGenerating gif...\n")
-    with imageio.get_writer('gif.gif', mode='I', duration=0.1) as writer:
-        for i in tqdm(range(256)):
-            image = imageio.imread(newfilename.split('.')[0] + f'-{iter}-{i}.png')
-            writer.append_data(image)
 
-def randomizeVertical(filename, iter, seed):
-    map, color_table, color_table_val = getPalette(filename, 256)
-    random.seed(seed)
-    newfilename = filename.split('.')[0] + '-256-randomized-vertical.png'
-    img = Image.open(filename)
-    height, width = img.size
-    image = {}
-    for x in range(width): # guarda las filas de pixeles en un diccionario
-        image[str(x)] = []
-        for y in range(height):
-            image[str(x)].append(img.getpixel((x, y)))
-    folder = newfilename.split('.')[0]
-    if not os.path.isdir(folder):
-        os.mkdir(folder)
-    os.chdir(folder)
-    print("\nRandomizing...\n")
-    for i in tqdm(range(iter)):
-        for y in range(height):
-            image[str(y)] = shift(image[str(y)],random.randint(0,256)) # rota el arreglo
-            for x in range(width):
-                color_rgb = image[str(y)][x] # saca el color del pixel
-                img.putpixel((x, y),(color_rgb[0], color_rgb[1], color_rgb[2])) # cambia el color del pixel
-        img.save(newfilename.split('.')[0] + f'-{iter}-{i}.png')
+def _write_gif(index_frames, palette_img, path, duration):
+    """Guarda una secuencia de matrices de índices usando la paleta de `palette_img`."""
+    palette = palette_img.getpalette()
+    frames = []
+    for idx in index_frames:
+        frame = palette_img.copy()
+        frame.frombytes(np.ascontiguousarray(idx, dtype=np.uint8).tobytes())
+        frame.putpalette(palette)
+        frames.append(frame)
+    frames[0].save(path, save_all=True, append_images=frames[1:],
+                   duration=duration, loop=0)
+    return path
 
-    print("\nGenerating gif...\n")
-    with imageio.get_writer('gif.gif', mode='I', duration=0.1) as writer:
-        for i in tqdm(range(256)):
-            image = imageio.imread(newfilename.split('.')[0] + f'-{iter}-{i}.png')
-            writer.append_data(image)
+
+def paletteCycling(filename, colors=16, out_dir=None, duration=100):
+    """Rota las entradas de la paleta. Un ciclo completo son `colors` frames."""
+    base = _load_quantized(filename, colors)
+    palette = np.array(base.getpalette()[:3 * colors], dtype=np.uint8).reshape(colors, 3)
+    frames = []
+    for k in range(colors):
+        frame = base.copy()
+        frame.putpalette(np.roll(palette, -k, axis=0).flatten().tolist())
+        frames.append(frame)
+    path = _output_path(filename, f"cycle{colors}", out_dir)
+    frames[0].save(path, save_all=True, append_images=frames[1:],
+                   duration=duration, loop=0)
+    return path
+
+
+def _oscillate(filename, horizontal, interval, distortion, iterations,
+               out_dir, duration):
+    base = _load_quantized(filename, 256)
+    arr = np.array(base)
+    if not horizontal:
+        arr = arr.T  # las columnas pasan a ser "filas" para reutilizar _roll_rows
+    n = arr.shape[0]
+    state = arr
+    index_frames = []
+    for i in range(iterations):
+        # Fase continua por línea y por frame, igual que el contador sin_count original.
+        phase = (i * n + np.arange(n)) * interval
+        shifts = np.floor(distortion * np.sin(phase)).astype(int)
+        state = _roll_rows(state, shifts)  # cada frame parte del anterior
+        index_frames.append(state if horizontal else state.T)
+    effect = "hosc" if horizontal else "vosc"
+    path = _output_path(filename, effect, out_dir)
+    return _write_gif(index_frames, base, path, duration)
+
+
+def horizontalOscillation(filename, interval=0.012, distortion=10, iterations=256,
+                          out_dir=None, duration=100):
+    """Desplaza cada fila con un seno: movimiento horizontal."""
+    return _oscillate(filename, True, interval, distortion, iterations,
+                      out_dir, duration)
+
+
+def verticalOscillation(filename, interval=0.012, distortion=10, iterations=256,
+                        out_dir=None, duration=100):
+    """Desplaza cada columna con un seno: movimiento vertical."""
+    return _oscillate(filename, False, interval, distortion, iterations,
+                      out_dir, duration)
+
+
+def _randomize(filename, horizontal, iterations, seed, out_dir, duration):
+    base = _load_quantized(filename, 256)
+    arr = np.array(base)
+    if not horizontal:
+        arr = arr.T
+    n, length = arr.shape
+    rng = random.Random(seed)  # generador propio: no toca el estado global de random
+    state = arr
+    index_frames = []
+    for _ in range(iterations):
+        shifts = np.array([rng.randrange(length) for _ in range(n)])
+        state = _roll_rows(state, shifts)
+        index_frames.append(state if horizontal else state.T)
+    effect = "rand-h" if horizontal else "rand-v"
+    path = _output_path(filename, effect, out_dir)
+    return _write_gif(index_frames, base, path, duration)
+
+
+def randomizeHorizontal(filename, iterations=256, seed=None, out_dir=None, duration=100):
+    """Desplaza cada fila un valor aleatorio por frame."""
+    return _randomize(filename, True, iterations, seed, out_dir, duration)
+
+
+def randomizeVertical(filename, iterations=256, seed=None, out_dir=None, duration=100):
+    """Desplaza cada columna un valor aleatorio por frame."""
+    return _randomize(filename, False, iterations, seed, out_dir, duration)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Genera GIFs con efectos sobre imágenes cuadradas.")
+    parser.add_argument("image", help="imagen cuadrada de entrada")
+    parser.add_argument("--out-dir", help="carpeta de salida (por defecto, la de la imagen)")
+    parser.add_argument("--duration", type=int, default=100, help="ms por frame")
+    sub = parser.add_subparsers(dest="effect", required=True)
+
+    cycle = sub.add_parser("cycle", help="rotación de paleta")
+    cycle.add_argument("--colors", type=int, default=16, help="colores de la paleta (1-256)")
+
+    for name, helptext in (("hosc", "oscilación horizontal"), ("vosc", "oscilación vertical")):
+        p = sub.add_parser(name, help=helptext)
+        p.add_argument("--interval", type=float, default=0.012)
+        p.add_argument("--distortion", type=float, default=10)
+        p.add_argument("--iterations", type=int, default=256)
+
+    for name, helptext in (("rand-h", "aleatorio horizontal"), ("rand-v", "aleatorio vertical")):
+        p = sub.add_parser(name, help=helptext)
+        p.add_argument("--iterations", type=int, default=256)
+        p.add_argument("--seed", type=int, default=None)
+
+    args = parser.parse_args(argv)
+    common = dict(out_dir=args.out_dir, duration=args.duration)
+    if args.effect == "cycle":
+        path = paletteCycling(args.image, colors=args.colors, **common)
+    elif args.effect == "hosc":
+        path = horizontalOscillation(args.image, args.interval, args.distortion,
+                                     args.iterations, **common)
+    elif args.effect == "vosc":
+        path = verticalOscillation(args.image, args.interval, args.distortion,
+                                   args.iterations, **common)
+    elif args.effect == "rand-h":
+        path = randomizeHorizontal(args.image, args.iterations, args.seed, **common)
+    else:
+        path = randomizeVertical(args.image, args.iterations, args.seed, **common)
+    print(path)
+    return path
+
+
+if __name__ == "__main__":
+    main()
